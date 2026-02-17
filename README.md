@@ -38,7 +38,7 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 6. Run live detection and log results  
 7. Test using error analysis using false positives/negatives
 
-## 8) Milestones
+## Milestones
 - [x] Scope definition
 - [x] Hardware selection and budget justification  
 - [x] Initial prototype assembly  
