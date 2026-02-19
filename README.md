@@ -29,6 +29,9 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 - Strong ecosystem compatibility with the Raspberry Pis.
 - Faster development and fewer integration failures for performance cost balancing.
 
+## Software Dependencies
+
+
 ## Technical Workflow
 1. Collect and consolidate datasets from multiple sources  
 2. Sort and label images into classes  
