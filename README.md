@@ -19,6 +19,12 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 ### Current priority
 **Data collection** is the primary blocker and focus, since it directly affects model training quality and edge inference performance.
 
+### Data Collection
+- Totalled 3000 - 3500 images in total
+- Images are split into labels: undamaged_box, damaged_box, opened_box
+- Majority of the images are public data set found online, while the remaining images are gathered from UNIS/created at home
+Due to the 10 week time constraint the requirement of public datasets was necessary to gauruntee the accuracy of correctness of the YOLOV8 model.
+
 ## Hardware Usage
 
 ### A. Canakit Raspberry Pi 5 (8GB) Starter Kit
