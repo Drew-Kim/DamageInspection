@@ -1,3 +1,9 @@
+"""
+Raspberry Pi Box Damage Inspection
+179M AI Senior Design Project
+This is PyQt5-based GUI application that captures video from the Raspberry Pi AI Camera (IMX-500 format)
+and displays the live feed with detected bounding boxes. The application allows the user to take scans of the current frame.
+"""
 
 import sys
 from datetime import datetime
