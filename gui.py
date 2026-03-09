@@ -9,8 +9,11 @@ and displays the live feed with detected bounding boxes. The application allows 
 import argparse
 import os
 import sys
+from datetime import datetime
+from typing import Optional
 
 import cv2
+import numpy as np
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
@@ -21,6 +24,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -28,16 +32,20 @@ from picamera2 import Picamera2
 from picamera2.devices import IMX500
 
 
-class CameraAppV3(QMainWindow):
+class CameraAppV4(QMainWindow):
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self.args = args
 
-        self.setWindowTitle("Damaged Box Inspection - Version 3")
+        self.setWindowTitle("Damaged Box Inspection - Version 4")
         self.resize(1200, 760)
 
         self.imx500 = None
         self.picam2 = None
+
+        self.live_mode = True
+        self.last_frame: Optional[np.ndarray] = None
+        self.frozen_frame: Optional[np.ndarray] = None
 
         self._build_ui()
 
@@ -72,8 +80,8 @@ class CameraAppV3(QMainWindow):
         button_row = QHBoxLayout()
         self.btn_take = QPushButton("Take Scan")
         self.btn_retake = QPushButton("Retake")
-        self.btn_take.setEnabled(False)
-        self.btn_retake.setEnabled(False)
+        self.btn_take.clicked.connect(self.take_scan)
+        self.btn_retake.clicked.connect(self.retake)
         button_row.addWidget(self.btn_take)
         button_row.addWidget(self.btn_retake)
         left_col.addLayout(button_row)
@@ -116,6 +124,11 @@ class CameraAppV3(QMainWindow):
             return False
 
     def update_frame(self) -> None:
+        if not self.live_mode:
+            if self.frozen_frame is not None:
+                self._show_frame(self.frozen_frame)
+            return
+
         request = self.picam2.capture_request()
         if request is None:
             self.status_label.setText("Status: Camera read failed")
@@ -131,14 +144,37 @@ class CameraAppV3(QMainWindow):
             return
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self.last_frame = frame_rgb
         self._show_frame(frame_rgb)
 
-    def _show_frame(self, frame_rgb):
+    def _show_frame(self, frame_rgb: np.ndarray) -> None:
         h, w, c = frame_rgb.shape
         image = QImage(frame_rgb.data, w, h, c * w, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(image)
         scaled = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video_label.setPixmap(scaled)
+
+    def take_scan(self) -> None:
+        if self.last_frame is None:
+            self.status_label.setText("Status: No frame yet")
+            return
+
+        self.frozen_frame = self.last_frame.copy()
+        self.live_mode = False
+        self.scan_time_label.setText(f"Last Scan: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.status_label.setText("Status: Scan captured")
+
+        # Placeholder table row for now (real detections come in Version 5).
+        self.table.setRowCount(1)
+        self.table.setItem(0, 0, QTableWidgetItem("pending"))
+        self.table.setItem(0, 1, QTableWidgetItem("--"))
+        self.table.setItem(0, 2, QTableWidgetItem("--"))
+
+    def retake(self) -> None:
+        self.live_mode = True
+        self.frozen_frame = None
+        self.status_label.setText("Status: Live feed running")
+        self.table.setRowCount(0)
 
     def closeEvent(self, event) -> None:
         self.timer.stop()
@@ -152,7 +188,7 @@ class CameraAppV3(QMainWindow):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GUI Version 3")
+    parser = argparse.ArgumentParser(description="GUI Version 4")
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -163,11 +199,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     app = QApplication(sys.argv)
-    window = CameraAppV3(args)
+    window = CameraAppV4(args)
     window.show()
     return app.exec_()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
