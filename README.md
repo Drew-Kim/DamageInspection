@@ -36,6 +36,9 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 - Faster development and fewer integration failures for performance cost balancing.
 
 ## Software Dependencies
+- PyQt5 for the GUI
+- Picamera 2 and IMX500 API for
+- SLite 3 for the Database
 
 
 ## Technical Workflow
