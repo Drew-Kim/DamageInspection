@@ -39,7 +39,7 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 - PyQt5 for the GUI
 - Picamera 2 and IMX500 API for
 - SLite 3 for the Database
-
+- Ultralytics for training the YOLOv8n model
 
 ## Technical Workflow
 1. Collect and consolidate datasets from multiple sources  
