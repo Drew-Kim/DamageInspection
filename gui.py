@@ -9,8 +9,9 @@ and displays the live feed with detected bounding boxes. The application allows 
 import argparse
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -30,30 +31,57 @@ from PyQt5.QtWidgets import (
 )
 from picamera2 import Picamera2
 from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics, postprocess_nanodet_detection
+from picamera2.devices.imx500.postprocess import scale_boxes
 
 
-class CameraAppV4(QMainWindow):
+MAX_DETECTIONS = 10
+NANODET_IOU = 0.65
+LIVE_STATUS = "Status: Live Feed"
+
+
+@dataclass
+class DetectionRow:
+    class_name: str
+    confidence: float
+    bbox: Tuple[int, int, int, int]
+
+
+def centered_item(value: str) -> QTableWidgetItem:
+    item = QTableWidgetItem(value)
+    item.setTextAlignment(Qt.AlignCenter)
+    return item
+
+
+class CameraAppV5(QMainWindow):
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self.args = args
 
-        self.setWindowTitle("Damaged Box Inspection - Version 4")
-        self.resize(1200, 760)
+        self.setWindowTitle("Damaged Box Inspection - Version 5")
+        self.resize(1360, 860)
 
         self.imx500 = None
         self.picam2 = None
+        self.intrinsics = None
+        self.labels: List[str] = []
 
         self.live_mode = True
         self.last_frame: Optional[np.ndarray] = None
         self.frozen_frame: Optional[np.ndarray] = None
+        self.last_detections: List[DetectionRow] = []
+
+        # Anti-flicker state
+        self.previous_detections: List[DetectionRow] = []
+        self.frames_since_detection = 0
 
         self._build_ui()
 
-        if not self._start_camera():
+        if not self._start_imx_camera():
             QMessageBox.critical(self, "Camera Error", "Could not start IMX500 camera.")
             raise RuntimeError("Camera start failed")
 
-        self.status_label.setText("Status: Live feed running")
+        self.status_label.setText(LIVE_STATUS)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_frame)
@@ -62,38 +90,45 @@ class CameraAppV4(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
-        layout = QHBoxLayout(root)
 
+        layout = QHBoxLayout(root)
         left_col = QVBoxLayout()
         right_col = QVBoxLayout()
         layout.addLayout(left_col, 4)
         layout.addLayout(right_col, 2)
 
-        self.video_label = QLabel("Waiting for camera...")
+        self.video_label = QLabel("Waiting for camera frames...")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet(
             "background:#111; color:#ddd; border:1px solid #444; font-size:16px;"
         )
-        self.video_label.setMinimumSize(860, 520)
+        self.video_label.setMinimumSize(900, 560)
         left_col.addWidget(self.video_label)
 
-        button_row = QHBoxLayout()
+        controls = QHBoxLayout()
         self.btn_take = QPushButton("Take Scan")
         self.btn_retake = QPushButton("Retake")
-        self.btn_take.clicked.connect(self.take_scan)
+        self.btn_take.clicked.connect(self.take_snapshot)
         self.btn_retake.clicked.connect(self.retake)
-        button_row.addWidget(self.btn_take)
-        button_row.addWidget(self.btn_retake)
-        left_col.addLayout(button_row)
+        controls.addWidget(self.btn_take)
+        controls.addWidget(self.btn_retake)
+        left_col.addLayout(controls)
 
-        self.status_label = QLabel("Status: Starting camera")
+        self.status_label = QLabel(LIVE_STATUS)
         self.scan_time_label = QLabel("Last Scan: --")
         left_col.addWidget(self.status_label)
         left_col.addWidget(self.scan_time_label)
 
-        right_col.addWidget(QLabel("Detection Results"))
+        info = QLabel("Detection Results")
+        info.setStyleSheet("font-size:16px; font-weight:600;")
+        right_col.addWidget(info)
+
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Class", "Confidence", "Location (TL,BR)"])
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setColumnWidth(0, 150)
+        self.table.setColumnWidth(1, 90)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setMinimumHeight(520)
         right_col.addWidget(self.table)
 
@@ -106,22 +141,124 @@ class CameraAppV4(QMainWindow):
         action_row.addWidget(self.btn_database)
         right_col.addLayout(action_row)
 
-    def _start_camera(self) -> bool:
+    def _start_imx_camera(self) -> bool:
         if not os.path.isfile(self.args.model):
             return False
 
         try:
             self.imx500 = IMX500(self.args.model)
+            self.intrinsics = self.imx500.network_intrinsics
+
+            if self.intrinsics is None:
+                self.intrinsics = NetworkIntrinsics()
+                self.intrinsics.task = "object detection"
+            elif self.intrinsics.task != "object detection":
+                return False
+
+            if os.path.isfile(self.args.labels):
+                with open(self.args.labels, "r", encoding="utf-8") as f:
+                    self.intrinsics.labels = f.read().splitlines()
+
+            self.intrinsics.ignore_dash_labels = True
+            self.intrinsics.update_with_defaults()
+            self.labels = [label for label in (self.intrinsics.labels or []) if label and label != "-"]
+
             self.picam2 = Picamera2(self.imx500.camera_num)
             config = self.picam2.create_preview_configuration(
-                main={"size": (self.args.width, self.args.height), "format": "RGB888"}
+                main={"size": (self.args.width, self.args.height), "format": "RGB888"},
+                buffer_count=12,
             )
+            self.imx500.show_network_fw_progress_bar()
             self.picam2.start(config, show_preview=False)
+
+            if self.intrinsics.preserve_aspect_ratio:
+                self.imx500.set_auto_aspect_ratio()
+
             return True
         except Exception:
             self.imx500 = None
+            self.intrinsics = None
             self.picam2 = None
             return False
+
+    def _read_frame_and_detections(self) -> Tuple[Optional[np.ndarray], List[DetectionRow]]:
+        request = self.picam2.capture_request()
+        if request is None:
+            return None, []
+
+        try:
+            frame = request.make_array("main")
+            metadata = request.get_metadata()
+        finally:
+            request.release()
+
+        if frame is None:
+            return None, []
+
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        detections = self._parse_imx_detections(metadata) if metadata else []
+        return frame_rgb, detections
+
+    def _parse_imx_detections(self, metadata: dict) -> List[DetectionRow]:
+        np_outputs = self.imx500.get_outputs(metadata, add_batch=True)
+        if np_outputs is None:
+            return []
+
+        input_w, input_h = self.imx500.get_input_size()
+
+        if self.intrinsics.postprocess == "nanodet":
+            boxes, scores, classes = postprocess_nanodet_detection(
+                outputs=np_outputs[0],
+                conf=self.args.threshold,
+                iou_thres=NANODET_IOU,
+                max_out_dets=MAX_DETECTIONS,
+            )[0]
+            boxes = scale_boxes(boxes, 1, 1, input_h, input_w, False, False)
+            return self._build_rows(boxes, scores, classes, metadata)
+
+        boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
+
+        candidates: List[List[DetectionRow]] = []
+        for use_norm in (bool(self.intrinsics.bbox_normalization), not bool(self.intrinsics.bbox_normalization)):
+            test_boxes = boxes / input_h if use_norm else boxes
+            candidates.append(self._build_rows(test_boxes[:, [1, 0, 3, 2]], scores, classes, metadata))
+            candidates.append(self._build_rows(test_boxes, scores, classes, metadata))
+
+        return max(candidates, key=len, default=[])
+
+    def _build_rows(self, boxes, scores, classes, metadata: dict) -> List[DetectionRow]:
+        rows: List[DetectionRow] = []
+        for box, score, category in zip(boxes, scores, classes):
+            confidence = float(score)
+            if confidence < self.args.threshold:
+                continue
+
+            x, y, w, h = self.imx500.convert_inference_coords(box, metadata, self.picam2)
+            x, y, w, h = int(x), int(y), int(w), int(h)
+            if w <= 0 or h <= 0:
+                continue
+
+            class_idx = int(category)
+            class_name = self.labels[class_idx] if 0 <= class_idx < len(self.labels) else f"class_{class_idx}"
+            rows.append(DetectionRow(class_name, confidence, (x, y, x + w, y + h)))
+
+            if len(rows) >= MAX_DETECTIONS:
+                break
+
+        return rows
+
+    def _stabilize(self, rows: List[DetectionRow]) -> List[DetectionRow]:
+        if rows:
+            self.previous_detections = rows
+            self.frames_since_detection = 0
+            return rows
+
+        if self.previous_detections and self.frames_since_detection < self.args.hold_frames:
+            self.frames_since_detection += 1
+            return self.previous_detections
+
+        self.previous_detections = []
+        return []
 
     def update_frame(self) -> None:
         if not self.live_mode:
@@ -129,23 +266,35 @@ class CameraAppV4(QMainWindow):
                 self._show_frame(self.frozen_frame)
             return
 
-        request = self.picam2.capture_request()
-        if request is None:
-            self.status_label.setText("Status: Camera read failed")
-            return
-
-        try:
-            frame = request.make_array("main")
-        finally:
-            request.release()
-
+        frame, detections = self._read_frame_and_detections()
         if frame is None:
             self.status_label.setText("Status: Camera read failed")
             return
 
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        self.last_frame = frame_rgb
-        self._show_frame(frame_rgb)
+        stable = self._stabilize(detections)
+        frame_draw = frame.copy()
+        self._draw_overlay(frame_draw, stable)
+
+        self.last_frame = frame_draw
+        self.last_detections = stable
+        self.status_label.setText(f"{LIVE_STATUS} | Detections: {len(stable)}")
+        self._show_frame(frame_draw)
+
+    def _draw_overlay(self, frame_rgb: np.ndarray, rows: List[DetectionRow]) -> None:
+        for row in rows:
+            x1, y1, x2, y2 = row.bbox
+            cv2.rectangle(frame_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = f"{row.class_name} ({row.confidence:.2f})"
+            cv2.putText(
+                frame_rgb,
+                label,
+                (x1 + 5, max(y1 - 8, 18)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 0, 0),
+                1,
+                cv2.LINE_AA,
+            )
 
     def _show_frame(self, frame_rgb: np.ndarray) -> None:
         h, w, c = frame_rgb.shape
@@ -154,27 +303,29 @@ class CameraAppV4(QMainWindow):
         scaled = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video_label.setPixmap(scaled)
 
-    def take_scan(self) -> None:
+    def take_snapshot(self) -> None:
         if self.last_frame is None:
-            self.status_label.setText("Status: No frame yet")
+            self.status_label.setText("Status: No feed yet")
             return
 
         self.frozen_frame = self.last_frame.copy()
         self.live_mode = False
         self.scan_time_label.setText(f"Last Scan: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.status_label.setText("Status: Scan captured")
-
-        # Placeholder table row for now (real detections come in Version 5).
-        self.table.setRowCount(1)
-        self.table.setItem(0, 0, QTableWidgetItem("pending"))
-        self.table.setItem(0, 1, QTableWidgetItem("--"))
-        self.table.setItem(0, 2, QTableWidgetItem("--"))
+        self.status_label.setText(f"Status: Scan captured ({len(self.last_detections)} detections)")
+        self._populate_table(self.last_detections)
 
     def retake(self) -> None:
         self.live_mode = True
         self.frozen_frame = None
-        self.status_label.setText("Status: Live feed running")
-        self.table.setRowCount(0)
+        self.status_label.setText(LIVE_STATUS)
+        self._populate_table([])
+
+    def _populate_table(self, rows: List[DetectionRow]) -> None:
+        self.table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            self.table.setItem(i, 0, centered_item(row.class_name))
+            self.table.setItem(i, 1, centered_item(f"{row.confidence:.3f}"))
+            self.table.setItem(i, 2, centered_item(f"{row.bbox[0]},{row.bbox[1]},{row.bbox[2]},{row.bbox[3]}"))
 
     def closeEvent(self, event) -> None:
         self.timer.stop()
@@ -188,18 +339,21 @@ class CameraAppV4(QMainWindow):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GUI Version 4")
+    parser = argparse.ArgumentParser(description="GUI Version 5")
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--model", type=str, default="/home/pi/network.rpk")
+    parser.add_argument("--labels", type=str, default="/home/pi/labels.txt")
+    parser.add_argument("--threshold", type=float, default=0.40)
+    parser.add_argument("--hold-frames", type=int, default=5)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     app = QApplication(sys.argv)
-    window = CameraAppV4(args)
+    window = CameraAppV5(args)
     window.show()
     return app.exec_()
 
