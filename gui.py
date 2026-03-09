@@ -5,44 +5,53 @@ This is PyQt5-based GUI application that captures video from the Raspberry Pi AI
 and displays the live feed with detected bounding boxes. The application allows the user to take scans of the current frame.
 """
 
-import sys
-from datetime import datetime
-from typing import List, Tuple
 
-from PyQt5.QtCore import Qt
+import argparse
+import os
+import sys
+
+import cv2
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+from picamera2 import Picamera2
+from picamera2.devices import IMX500
 
 
-DemoRow = Tuple[str, float, Tuple[int, int, int, int]]
-
-
-def centered_item(value: str) -> QTableWidgetItem:
-    item = QTableWidgetItem(value)
-    item.setTextAlignment(Qt.AlignCenter)
-    return item
-
-
-class CameraAppV2(QMainWindow):
-    def __init__(self):
+class CameraAppV3(QMainWindow):
+    def __init__(self, args: argparse.Namespace):
         super().__init__()
-        self.setWindowTitle("Damaged Box Inspection - Version 2")
+        self.args = args
+
+        self.setWindowTitle("Damaged Box Inspection - Version 3")
         self.resize(1200, 760)
 
-        self.last_demo_rows: List[DemoRow] = [
-            ("dent", 0.91, (120, 90, 280, 210)),
-            ("tear", 0.83, (360, 140, 520, 300)),
-        ]
+        self.imx500 = None
+        self.picam2 = None
 
+        self._build_ui()
+
+        if not self._start_camera():
+            QMessageBox.critical(self, "Camera Error", "Could not start IMX500 camera.")
+            raise RuntimeError("Camera start failed")
+
+        self.status_label.setText("Status: Live feed running")
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_frame)
+        self.timer.start(int(1000 / max(1, self.args.fps)))
+
+    def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
         layout = QHBoxLayout(root)
@@ -52,7 +61,7 @@ class CameraAppV2(QMainWindow):
         layout.addLayout(left_col, 4)
         layout.addLayout(right_col, 2)
 
-        self.video_label = QLabel("Video feed will be added in Version 3")
+        self.video_label = QLabel("Waiting for camera...")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet(
             "background:#111; color:#ddd; border:1px solid #444; font-size:16px;"
@@ -63,24 +72,20 @@ class CameraAppV2(QMainWindow):
         button_row = QHBoxLayout()
         self.btn_take = QPushButton("Take Scan")
         self.btn_retake = QPushButton("Retake")
-        self.btn_take.clicked.connect(self.take_scan)
-        self.btn_retake.clicked.connect(self.retake)
+        self.btn_take.setEnabled(False)
+        self.btn_retake.setEnabled(False)
         button_row.addWidget(self.btn_take)
         button_row.addWidget(self.btn_retake)
         left_col.addLayout(button_row)
 
-        self.status_label = QLabel("Status: Ready")
+        self.status_label = QLabel("Status: Starting camera")
         self.scan_time_label = QLabel("Last Scan: --")
         left_col.addWidget(self.status_label)
         left_col.addWidget(self.scan_time_label)
 
         right_col.addWidget(QLabel("Detection Results"))
-
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Class", "Confidence", "Location (TL,BR)"])
-        self.table.setColumnWidth(0, 160)
-        self.table.setColumnWidth(1, 100)
-        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setMinimumHeight(520)
         right_col.addWidget(self.table)
 
@@ -93,30 +98,76 @@ class CameraAppV2(QMainWindow):
         action_row.addWidget(self.btn_database)
         right_col.addLayout(action_row)
 
-    def _populate_demo_rows(self, rows: List[DemoRow]) -> None:
-        self.table.setRowCount(len(rows))
-        for row_i, row in enumerate(rows):
-            class_name, confidence, bbox = row
-            self.table.setItem(row_i, 0, centered_item(class_name))
-            self.table.setItem(row_i, 1, centered_item(f"{confidence:.3f}"))
-            self.table.setItem(row_i, 2, centered_item(f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"))
+    def _start_camera(self) -> bool:
+        if not os.path.isfile(self.args.model):
+            return False
 
-    def take_scan(self) -> None:
-        self.status_label.setText("Status: Demo snapshot captured")
-        self.scan_time_label.setText(f"Last Scan: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self._populate_demo_rows(self.last_demo_rows)
+        try:
+            self.imx500 = IMX500(self.args.model)
+            self.picam2 = Picamera2(self.imx500.camera_num)
+            config = self.picam2.create_preview_configuration(
+                main={"size": (self.args.width, self.args.height), "format": "RGB888"}
+            )
+            self.picam2.start(config, show_preview=False)
+            return True
+        except Exception:
+            self.imx500 = None
+            self.picam2 = None
+            return False
 
-    def retake(self) -> None:
-        self.status_label.setText("Status: Ready")
-        self.table.setRowCount(0)
+    def update_frame(self) -> None:
+        request = self.picam2.capture_request()
+        if request is None:
+            self.status_label.setText("Status: Camera read failed")
+            return
+
+        try:
+            frame = request.make_array("main")
+        finally:
+            request.release()
+
+        if frame is None:
+            self.status_label.setText("Status: Camera read failed")
+            return
+
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self._show_frame(frame_rgb)
+
+    def _show_frame(self, frame_rgb):
+        h, w, c = frame_rgb.shape
+        image = QImage(frame_rgb.data, w, h, c * w, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(image)
+        scaled = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.video_label.setPixmap(scaled)
+
+    def closeEvent(self, event) -> None:
+        self.timer.stop()
+        if self.picam2 is not None:
+            try:
+                self.picam2.stop()
+                self.picam2.close()
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="GUI Version 3")
+    parser.add_argument("--fps", type=int, default=20)
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--model", type=str, default="/home/pi/network.rpk")
+    return parser.parse_args()
 
 
 def main() -> int:
+    args = parse_args()
     app = QApplication(sys.argv)
-    window = CameraAppV2()
+    window = CameraAppV3(args)
     window.show()
     return app.exec_()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
