@@ -51,8 +51,8 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 - [x] Scope definition
 - [x] Hardware selection and budget justification  
 - [x] Initial prototype assembly  
-- [ ] Dataset expansion and class balancing  
-- [ ] Baseline model training  
-- [ ] Performance tuning  
-- [ ] Final Model/Demo
+- [X] Dataset expansion and class balancing  
+- [X] Baseline model training  
+- [X] Performance tuning  
+- [X] Final Model/Demo
 
