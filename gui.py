@@ -5,9 +5,9 @@ This is PyQt5-based GUI application that captures video from the Raspberry Pi AI
 and displays the live feed with detected bounding boxes. The application allows the user to take scans of the current frame.
 """
 
-
 import argparse
 import os
+import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,12 +53,60 @@ def centered_item(value: str) -> QTableWidgetItem:
     return item
 
 
-class CameraAppV5(QMainWindow):
+class LocalDatabaseV6:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._create_tables()
+
+    def _create_tables(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scan_time TEXT NOT NULL,
+                    class_name TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    x1 INTEGER NOT NULL,
+                    y1 INTEGER NOT NULL,
+                    x2 INTEGER NOT NULL,
+                    y2 INTEGER NOT NULL
+                )
+                """
+            )
+
+    def insert_entries(self, scan_time: str, rows: List[DetectionRow]) -> int:
+        if not rows:
+            return 0
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                INSERT INTO entries (scan_time, class_name, confidence, x1, y1, x2, y2)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        scan_time,
+                        row.class_name,
+                        float(row.confidence),
+                        int(row.bbox[0]),
+                        int(row.bbox[1]),
+                        int(row.bbox[2]),
+                        int(row.bbox[3]),
+                    )
+                    for row in rows
+                ],
+            )
+        return len(rows)
+
+
+class CameraAppV6(QMainWindow):
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self.args = args
 
-        self.setWindowTitle("Damaged Box Inspection - Version 5")
+        self.setWindowTitle("Damaged Box Inspection - Version 6")
         self.resize(1360, 860)
 
         self.imx500 = None
@@ -70,10 +118,12 @@ class CameraAppV5(QMainWindow):
         self.last_frame: Optional[np.ndarray] = None
         self.frozen_frame: Optional[np.ndarray] = None
         self.last_detections: List[DetectionRow] = []
+        self.last_scan_time: Optional[str] = None
 
-        # Anti-flicker state
         self.previous_detections: List[DetectionRow] = []
         self.frames_since_detection = 0
+
+        self.db = LocalDatabaseV6(self.args.db_path)
 
         self._build_ui()
 
@@ -135,7 +185,7 @@ class CameraAppV5(QMainWindow):
         action_row = QHBoxLayout()
         self.btn_confirm = QPushButton("Confirm")
         self.btn_database = QPushButton("Database")
-        self.btn_confirm.setEnabled(False)
+        self.btn_confirm.clicked.connect(self.confirm_scan)
         self.btn_database.setEnabled(False)
         action_row.addWidget(self.btn_confirm)
         action_row.addWidget(self.btn_database)
@@ -241,7 +291,6 @@ class CameraAppV5(QMainWindow):
             class_idx = int(category)
             class_name = self.labels[class_idx] if 0 <= class_idx < len(self.labels) else f"class_{class_idx}"
             rows.append(DetectionRow(class_name, confidence, (x, y, x + w, y + h)))
-
             if len(rows) >= MAX_DETECTIONS:
                 break
 
@@ -310,9 +359,20 @@ class CameraAppV5(QMainWindow):
 
         self.frozen_frame = self.last_frame.copy()
         self.live_mode = False
-        self.scan_time_label.setText(f"Last Scan: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.last_scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.scan_time_label.setText(f"Last Scan: {self.last_scan_time}")
         self.status_label.setText(f"Status: Scan captured ({len(self.last_detections)} detections)")
         self._populate_table(self.last_detections)
+
+    def confirm_scan(self) -> None:
+        if self.last_scan_time is None:
+            QMessageBox.warning(self, "Confirm", "Take a scan first before confirming.")
+            return
+
+        saved_count = self.db.insert_entries(self.last_scan_time, self.last_detections)
+        self.status_label.setText(
+            f"Status: Saved {saved_count} entr{'y' if saved_count == 1 else 'ies'}"
+        )
 
     def retake(self) -> None:
         self.live_mode = True
@@ -339,7 +399,7 @@ class CameraAppV5(QMainWindow):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GUI Version 5")
+    parser = argparse.ArgumentParser(description="GUI Version 6")
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -347,13 +407,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--labels", type=str, default="/home/pi/labels.txt")
     parser.add_argument("--threshold", type=float, default=0.40)
     parser.add_argument("--hold-frames", type=int, default=5)
+    parser.add_argument("--db-path", type=str, default="/home/pi/DamageInspection/inspection.db")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     app = QApplication(sys.argv)
-    window = CameraAppV5(args)
+    window = CameraAppV6(args)
     window.show()
     return app.exec_()
 
