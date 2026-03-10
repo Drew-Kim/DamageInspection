@@ -18,7 +18,9 @@ import numpy as np
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QApplication,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -53,7 +55,7 @@ def centered_item(value: str) -> QTableWidgetItem:
     return item
 
 
-class LocalDatabaseV6:
+class LocalDatabaseV7:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._create_tables()
@@ -100,13 +102,92 @@ class LocalDatabaseV6:
             )
         return len(rows)
 
+    def fetch_entries(self) -> List[Tuple]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, scan_time, class_name, confidence, x1, y1, x2, y2
+                FROM entries
+                ORDER BY id DESC
+                """
+            )
+            return cursor.fetchall()
 
-class CameraAppV6(QMainWindow):
+    def delete_entry(self, entry_id: int) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+
+
+class DatabaseOverviewDialogV7(QDialog):
+    def __init__(self, db: LocalDatabaseV7, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("Database Overview")
+        self.resize(980, 600)
+
+        layout = QVBoxLayout(self)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            ["Entry ID", "Scan Time", "Class", "Confidence", "Location (TL,BR)"]
+        )
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table)
+
+        controls = QHBoxLayout()
+        self.btn_delete = QPushButton("Delete Selected")
+        self.btn_delete.clicked.connect(self.delete_selected)
+        controls.addWidget(self.btn_delete)
+        layout.addLayout(controls)
+
+        self.load_rows()
+
+    def load_rows(self) -> None:
+        rows = self.db.fetch_entries()
+        self.table.setRowCount(len(rows))
+
+        for row_i, row in enumerate(rows):
+            entry_id, scan_time, class_name, confidence, x1, y1, x2, y2 = row
+            values = [
+                str(entry_id),
+                scan_time,
+                class_name,
+                f"{confidence:.3f}",
+                f"{x1},{y1},{x2},{y2}",
+            ]
+            for col_i, value in enumerate(values):
+                self.table.setItem(row_i, col_i, centered_item(value))
+
+    def delete_selected(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Delete", "Select a row first.")
+            return
+
+        entry_id = int(self.table.item(row, 0).text())
+        answer = QMessageBox.question(
+            self,
+            "Delete Entry",
+            f"Delete entry ID {entry_id}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        self.db.delete_entry(entry_id)
+        self.table.removeRow(row)
+
+
+class CameraAppV7(QMainWindow):
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self.args = args
 
-        self.setWindowTitle("Damaged Box Inspection - Version 6")
+        self.setWindowTitle("Damaged Box Inspection - Version 7")
         self.resize(1360, 860)
 
         self.imx500 = None
@@ -123,7 +204,7 @@ class CameraAppV6(QMainWindow):
         self.previous_detections: List[DetectionRow] = []
         self.frames_since_detection = 0
 
-        self.db = LocalDatabaseV6(self.args.db_path)
+        self.db = LocalDatabaseV7(self.args.db_path)
 
         self._build_ui()
 
@@ -175,7 +256,7 @@ class CameraAppV6(QMainWindow):
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Class", "Confidence", "Location (TL,BR)"])
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setColumnWidth(0, 150)
         self.table.setColumnWidth(1, 90)
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -186,7 +267,7 @@ class CameraAppV6(QMainWindow):
         self.btn_confirm = QPushButton("Confirm")
         self.btn_database = QPushButton("Database")
         self.btn_confirm.clicked.connect(self.confirm_scan)
-        self.btn_database.setEnabled(False)
+        self.btn_database.clicked.connect(self.open_database)
         action_row.addWidget(self.btn_confirm)
         action_row.addWidget(self.btn_database)
         right_col.addLayout(action_row)
@@ -374,6 +455,10 @@ class CameraAppV6(QMainWindow):
             f"Status: Saved {saved_count} entr{'y' if saved_count == 1 else 'ies'}"
         )
 
+    def open_database(self) -> None:
+        dialog = DatabaseOverviewDialogV7(self.db, self)
+        dialog.exec_()
+
     def retake(self) -> None:
         self.live_mode = True
         self.frozen_frame = None
@@ -399,7 +484,7 @@ class CameraAppV6(QMainWindow):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GUI Version 6")
+    parser = argparse.ArgumentParser(description="GUI Version 7")
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -414,7 +499,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     app = QApplication(sys.argv)
-    window = CameraAppV6(args)
+    window = CameraAppV7(args)
     window.show()
     return app.exec_()
 
