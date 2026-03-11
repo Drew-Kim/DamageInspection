@@ -48,7 +48,7 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 3. Train a lightweight detection model  
 4. Export and optimize for Raspberry Pi implementation  
 5. Deploy on Pi 5 + AI Camera  
-6. Run live detection and log results locally via a GUI 
+6. Run live detection and log results locally via a GUI integated with the PI + AI Camera
 7. Test using error analysis using false positives/negatives
 8. Generate any changes and updates based on performance outcomes
 
