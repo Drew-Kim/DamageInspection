@@ -23,7 +23,8 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 - Totalled 3000 - 3500 images in total
 - Images are split into labels: undamaged_box, damaged_box, opened_box
 - The majority of the images are public datasets found online, while the remaining images are gathered from UNIS/created at home
-- Due to the 10-week time constraint, the requirement of public datasets was necessary to guarantee the accuracy and correctness of the YOLOV8 model.
+- Due to the 10-week time constraint, the requirement of public datasets was necessary for the YOLOV8 model
+- This was accomplished via RoboFlow in order to strengthen the models accuracy when trained
 
 ## Hardware Usage
 
@@ -37,8 +38,8 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 
 ## Software Dependencies
 - PyQt5 for the GUI
-- Picamera 2 and IMX500 API for
-- SLite 3 for the Database
+- Picamera 2 and IMX500 API for image box detection and live analyzation
+- SQLite 3 for the Database
 - Ultralytics for training the YOLOv8n model
 
 ## Technical Workflow
@@ -47,8 +48,9 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 3. Train a lightweight detection model  
 4. Export and optimize for Raspberry Pi implementation  
 5. Deploy on Pi 5 + AI Camera  
-6. Run live detection and log results  
+6. Run live detection and log results locally via a GUI 
 7. Test using error analysis using false positives/negatives
+8. Generate any changes and updates based on performance outcomes
 
 ## Milestones
 - [x] Scope definition
