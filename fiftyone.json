@@ -1,0 +1,50 @@
+{
+    "colorPool": [
+        "#EE0000",
+        "#EE6600",
+        "#993300",
+        "#996633",
+        "#999900",
+        "#009900",
+        "#003300",
+        "#009999",
+        "#000099",
+        "#0066FF",
+        "#6600FF",
+        "#CC33CC",
+        "#777799"
+    ],
+    "colorBy": "value",
+    "opacity": 0.7,
+    "multicolorKeypoints": false,
+    "showSkeletons": true,
+    "fields": [
+        {
+            "path": "ground_truth",
+            "fieldColor": "#cc33cc",
+            "colorByAttribute": "label",
+            "valueColors": [
+                {
+                    "color": "#00cc00",
+                    "value": "undamaged_box"
+                },
+                {
+                    "color": "#ff0000",
+                    "value": "damaged_box"
+                },
+                {
+                    "color": "#ff8800",
+                    "value": "opened_box"
+                }
+            ],
+            "maskTargetsColors": []
+        }
+    ],
+    "labelTags": null,
+    "defaultMaskTargetsColors": null,
+    "colorscales": [],
+    "defaultColorscale": {
+        "name": "viridis",
+        "list": null
+    }
+}
