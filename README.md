@@ -38,7 +38,7 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 
 ## Software Dependencies
 - PyQt5 for the GUI
-- Picamera2 and IMX500 API for image box detection and live analyzation
+- Picamera2 and IMX500 API for image box detection and live analysis
 - SQLite3 for the Database
 - Ultralytics for training the YOLOv8n model
 
@@ -51,6 +51,9 @@ Given external data access limits and a 10-week timeline, we adopted a **compute
 6. Run live detection and log results locally via a GUI integrated with the Pi + AI Camera
 7. Test using error analysis using false positives/negatives
 8. Generate any changes and updates based on performance outcomes
+
+## Video Demo
+https://github.com/user-attachments/assets/da45b42c-a063-49de-85c3-44da082d090a
 
 ## Milestones
 - [X] Scope definition
