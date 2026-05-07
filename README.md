@@ -1,6 +1,8 @@
 # Damage Inspection Prototype: AGV/AMR-Inspired Damage Inspection System with UNIS  
 **CS 179M AI Senior Design Project | Raspberry Pi 5 (8GB) + Raspberry Pi AI Camera**
 
+[Project Google Drive](https://drive.google.com/drive/folders/1hflmRnE6i4HJh7fWM5gfUjyAqjx4E8f9?usp=drive_link) 
+
 ## Summary
 This project develops an **AI vision prototype** to detect visible packaging damage in warehouse environments. The system runs on a **Raspberry Pi 5 (8GB)** and **Raspberry Pi AI Camera**, with future alignment to AMR/AGV deployment.
 
